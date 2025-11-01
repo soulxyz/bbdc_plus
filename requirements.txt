@@ -1,0 +1,21 @@
+# BBDC Plus - 背单词增强工具
+# 依赖包列表
+
+# HTML 解析
+beautifulsoup4>=4.12.0
+
+# OCR 识别
+pytesseract>=0.3.10
+Pillow>=10.0.0
+
+# 全局快捷键
+keyboard>=0.13.5
+
+# 注意事项：
+# 1. 需要单独安装 Tesseract OCR 软件
+#    Windows: https://github.com/UB-Mannheim/tesseract/wiki
+#    下载安装后，确保 tesseract.exe 在系统 PATH 中
+#    或在 config.py 中设置 TESSERACT_CMD 路径
+#
+# 2. 使用管理员权限运行以启用全局快捷键
+
