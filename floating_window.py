@@ -1,12 +1,14 @@
 """
 悬浮卡片窗口
 显示单词的词根词缀信息
+支持高DPI和显示缩放
 """
 
 import tkinter as tk
 from tkinter import font as tkfont
 from typing import Optional, Dict, List, Tuple
 import config
+from dpi_utils import setup_tkinter_dpi
 
 
 class FloatingWindow:
@@ -14,6 +16,9 @@ class FloatingWindow:
         """初始化悬浮窗"""
         self.root = tk.Tk()
         self.root.title("BBDC Plus")
+        
+        # 设置 DPI 支持
+        setup_tkinter_dpi(self.root)
         
         # 设置窗口属性
         self.root.attributes('-topmost', True)  # 置顶
@@ -177,8 +182,6 @@ class FloatingWindow:
         
         # 显示单词和音标
         word_text = word_info['word'].upper()
-        if word_info.get('fuzzy_match'):
-            word_text += f"  (识别为: {word_info.get('matched_word', '')})"
         
         word_label = tk.Label(
             self.content_frame,
@@ -188,6 +191,20 @@ class FloatingWindow:
             fg=config.COLOR_WORD
         )
         word_label.pack(anchor=tk.W)
+
+        # 如果是模糊匹配，且原始识别与词库单词不同，显著提示“词库未收录”
+        if word_info.get('fuzzy_match') and word_info.get('original_query') and word_info.get('matched_word'):
+            original = word_info['original_query']
+            matched = word_info['matched_word']
+            if original != matched:
+                warn = tk.Label(
+                    self.content_frame,
+                    text=f"⚠️  词库未收录: {original}  · 最接近: {matched}",
+                    font=self.font_body,
+                    bg=config.COLOR_BG,
+                    fg="#F1C40F"
+                )
+                warn.pack(anchor=tk.W, pady=(2, 8))
         
         phonetic_label = tk.Label(
             self.content_frame,
@@ -258,20 +275,29 @@ class FloatingWindow:
             )
             def_label.pack(anchor=tk.W)
         
-        # 显示例句
+        # 显示真题意群（单独板块）
         if 'examples' in word_info and word_info['examples']:
-            examples_text = "\n   ".join(word_info['examples'][:2])  # 最多显示2个例句
-            
+            self._add_separator()
+            section_label = tk.Label(
+                self.content_frame,
+                text="🧪 真题意群",
+                font=self.font_body,
+                bg=config.COLOR_BG,
+                fg=config.COLOR_SECTION_TITLE
+            )
+            section_label.pack(anchor=tk.W, pady=(5, 3))
+
+            examples_text = "\n".join([f"   {ex}" for ex in word_info['examples'][:2]])  # 最多显示2个
             example_label = tk.Label(
                 self.content_frame,
-                text=f"   {examples_text}",
+                text=examples_text,
                 font=self.font_root,
                 bg=config.COLOR_BG,
-                fg=config.COLOR_PHONETIC,
+                fg=config.COLOR_EXAMPLES,
                 wraplength=config.WINDOW_WIDTH - 50,
                 justify=tk.LEFT
             )
-            example_label.pack(anchor=tk.W, pady=(5, 0))
+            example_label.pack(anchor=tk.W, pady=(2, 0))
         
         # 显示相关词根
         if related_roots:

@@ -4,18 +4,18 @@
 # HTML 解析
 beautifulsoup4>=4.12.0
 
-# OCR 识别
-pytesseract>=0.3.10
+# OCR 识别（使用 RapidOCR，无需额外安装软件）
+rapidocr-onnxruntime>=1.3.0
 Pillow>=10.0.0
+numpy>=1.24.0
 
 # 全局快捷键
 keyboard>=0.13.5
 
 # 注意事项：
-# 1. 需要单独安装 Tesseract OCR 软件
-#    Windows: https://github.com/UB-Mannheim/tesseract/wiki
-#    下载安装后，确保 tesseract.exe 在系统 PATH 中
-#    或在 config.py 中设置 TESSERACT_CMD 路径
+# 1. RapidOCR 是基于深度学习的 OCR 引擎，无需额外安装软件
+#    - 首次运行会自动下载模型文件（约 10MB）
+#    - 识别速度快，准确率高
 #
 # 2. 使用管理员权限运行以启用全局快捷键
 

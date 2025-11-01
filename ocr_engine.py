@@ -1,38 +1,67 @@
 """
 OCR 识别引擎
-使用 Tesseract OCR 识别屏幕指定区域的文字
+使用 RapidOCR 识别屏幕指定区域的文字
 """
 
 import re
 from typing import List, Optional, Tuple
 from PIL import ImageGrab, Image
-import pytesseract
+from rapidocr_onnxruntime import RapidOCR
+import numpy as np
+from dpi_utils import get_dpi_manager
+import config
 
 
 class OCREngine:
+    _shared_instance = None
+
+    @classmethod
+    def get_shared(cls):
+        """获取共享的 OCR 实例（单例，避免重复加载模型）"""
+        if cls._shared_instance is None:
+            cls._shared_instance = OCREngine()
+        return cls._shared_instance
     def __init__(self):
         """初始化 OCR 引擎"""
         self.last_recognized_word = None
         self.recognition_count = 0
         
-        # 配置 Tesseract（如果需要指定路径）
-        # Windows 用户可能需要设置 Tesseract 路径
-        # pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+        # 获取 DPI 管理器
+        self.dpi_manager = get_dpi_manager()
+        self._last_image_hash: Optional[int] = None
+        
+        # 初始化 RapidOCR
+        print("   正在加载 RapidOCR 模型...")
+        self.ocr = RapidOCR()
+        print("   ✅ RapidOCR 加载完成")
     
     def capture_region(self, x: int, y: int, width: int, height: int) -> Image.Image:
         """截取屏幕指定区域
         
         Args:
-            x: 区域左上角 X 坐标
-            y: 区域左上角 Y 坐标
-            width: 区域宽度
-            height: 区域高度
+            x: 区域左上角 X 坐标（逻辑坐标）
+            y: 区域左上角 Y 坐标（逻辑坐标）
+            width: 区域宽度（逻辑坐标）
+            height: 区域高度（逻辑坐标）
         
         Returns:
             PIL Image 对象
         """
-        # 截取屏幕区域
-        bbox = (x, y, x + width, y + height)
+        # 应用 DPI 缩放（转换为物理坐标）
+        scaled_x, scaled_y, scaled_width, scaled_height = self.dpi_manager.scale_coordinates(
+            x, y, width, height
+        )
+        
+        # 调试输出：打印逻辑/物理坐标对照
+        try:
+            import config
+            if getattr(config, 'DEBUG', False):
+                print(f"📐 OCR 截图坐标: 逻辑=({x},{y},{width},{height}) → 物理=({scaled_x},{scaled_y},{scaled_width},{scaled_height})")
+        except Exception:
+            pass
+        
+        # 截取屏幕区域（使用物理坐标）
+        bbox = (scaled_x, scaled_y, scaled_x + scaled_width, scaled_y + scaled_height)
         screenshot = ImageGrab.grab(bbox)
         return screenshot
     
@@ -46,27 +75,68 @@ class OCREngine:
             识别出的文字
         """
         try:
-            # 图片预处理（提高识别率）
-            # 1. 转为灰度图
-            image = image.convert('L')
+            # 快速预处理：灰度 + 下采样 + 二值化（再转回RGB，兼容模型）
+            if getattr(config, 'OCR_FAST_MODE', True):
+                img = image.convert('L')
+                w, h = img.size
+                # 限制输入大小并按比例缩放
+                max_w = getattr(config, 'OCR_MAX_WIDTH', 900)
+                scale = getattr(config, 'OCR_DOWNSCALE', 0.75)
+                target_w = min(int(w * scale), max_w) if w > 0 else w
+                if target_w > 0 and target_w < w:
+                    target_h = max(1, int(h * target_w / w))
+                    img = img.resize((target_w, target_h), Image.BILINEAR)
+                # 二值化
+                thr = getattr(config, 'OCR_BIN_THRESHOLD', 180)
+                img = img.point(lambda p: 255 if p > thr else 0, mode='1')
+                # 转回三通道
+                img = img.convert('RGB')
+            else:
+                img = image.convert('RGB')
+
+            # 转换为 numpy 数组（RapidOCR 需要）
+            img_array = np.array(img)
             
-            # 2. 可选：增强对比度
-            # from PIL import ImageEnhance
-            # enhancer = ImageEnhance.Contrast(image)
-            # image = enhancer.enhance(2.0)
-            
-            # 使用 Tesseract 识别（只识别英文，提高速度）
-            # --psm 6: 假设文本是单个统一的文本块
-            # --oem 3: 默认 OCR 引擎模式
-            custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
-            text = pytesseract.image_to_string(image, lang='eng', config=custom_config)
+            # 使用 RapidOCR 识别
+            # result 格式: [[[box], text, confidence], ...]
+            result, elapse = self.ocr(img_array)
             
             self.recognition_count += 1
+            
+            # 如果没有识别结果
+            if not result:
+                return ""
+            
+            # 提取所有识别到的文本，用空格连接
+            texts = [item[1] for item in result]
+            text = ' '.join(texts)
+            
             return text.strip()
         
         except Exception as e:
             print(f"❌ OCR 识别错误: {e}")
             return ""
+
+    # ---- 图像变化检测 ----
+    def _compute_ahash(self, image: Image.Image) -> int:
+        """计算图像的 aHash（平均哈希），返回 64bit 整数"""
+        img = image.convert('L').resize((8, 8), Image.BILINEAR)
+        arr = np.asarray(img, dtype=np.float32)
+        mean = arr.mean()
+        bits = (arr > mean).astype(np.uint8).flatten()
+        value = 0
+        for b in bits:
+            value = (value << 1) | int(b)
+        return int(value)
+
+    def _hamming_distance(self, a: int, b: int) -> int:
+        x = a ^ b
+        # Brian Kernighan 技巧
+        cnt = 0
+        while x:
+            x &= x - 1
+            cnt += 1
+        return cnt
     
     def extract_words(self, text: str) -> List[str]:
         """从识别的文本中提取英文单词
@@ -77,6 +147,7 @@ class OCREngine:
         Returns:
             单词列表
         """
+        print(text)
         if not text:
             return []
         
@@ -108,6 +179,19 @@ class OCREngine:
         """
         # 截取屏幕
         image = self.capture_region(x, y, width, height)
+        
+        # 屏幕未变化则跳过 OCR
+        try:
+            current_hash = self._compute_ahash(image)
+            if self._last_image_hash is not None:
+                diff = self._hamming_distance(self._last_image_hash, current_hash)
+                if diff <= getattr(config, 'IMAGE_HASH_DIFF_THRESHOLD', 2):
+                    if getattr(config, 'DEBUG', False):
+                        print(f"🧩 图像未变化(H={diff})，跳过 OCR")
+                    return []
+            self._last_image_hash = current_hash
+        except Exception:
+            pass
         
         # 识别文字
         text = self.recognize_text(image)

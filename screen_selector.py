@@ -1,21 +1,28 @@
 """
 屏幕区域选择工具
 允许用户通过鼠标拖拽选择屏幕上的矩形区域
+支持高DPI和显示缩放
 """
 
 import tkinter as tk
 from typing import Tuple, Optional, Callable
+from dpi_utils import get_dpi_manager, setup_tkinter_dpi
 
 
 class ScreenSelector:
-    def __init__(self, callback: Optional[Callable] = None):
+    def __init__(self, callback: Optional[Callable] = None, master: Optional[tk.Misc] = None):
         """初始化屏幕选择器
         
         Args:
             callback: 选择完成后的回调函数，接收 (x, y, width, height) 参数
+            master: 可选，已有的 tkinter 根窗口/顶层窗口。若提供，将使用 Toplevel 避免多 Tk 冲突
         """
         self.callback = callback
+        self.master = master
         self.selected_region: Optional[Tuple[int, int, int, int]] = None
+        
+        # 获取 DPI 管理器
+        self.dpi_manager = get_dpi_manager()
         
         self.root = None
         self.canvas = None
@@ -28,12 +35,20 @@ class ScreenSelector:
         """显示选择界面，返回选中的区域
         
         Returns:
-            (x, y, width, height) 元组
+            (x, y, width, height) 元组（逻辑坐标）
         """
         self.selected_region = None
         
         # 创建全屏透明窗口
-        self.root = tk.Tk()
+        if self.master is not None:
+            # 使用 Toplevel，避免创建第二个 Tk 根窗口
+            self.root = tk.Toplevel(self.master)
+        else:
+            self.root = tk.Tk()
+        
+        # 设置 DPI 支持
+        setup_tkinter_dpi(self.root)
+        
         self.root.attributes('-fullscreen', True)
         self.root.attributes('-alpha', 0.3)  # 半透明
         self.root.attributes('-topmost', True)
@@ -71,7 +86,16 @@ class ScreenSelector:
         self.root.bind('<Escape>', lambda e: self.root.destroy())
         
         # 运行事件循环
-        self.root.mainloop()
+        if self.master is not None:
+            # 模态行为，阻塞直到关闭
+            try:
+                self.root.grab_set()
+            except Exception:
+                pass
+            self.root.focus_set()
+            self.root.wait_window()
+        else:
+            self.root.mainloop()
         
         return self.selected_region
     
@@ -151,11 +175,13 @@ class ScreenSelector:
                 self.canvas.delete(self.text)
             return
         
-        self.selected_region = (x1, y1, width, height)
+        # 将物理坐标转换成逻辑坐标再返回，避免后续重复缩放
+        lx, ly, lw, lh = self.dpi_manager.unscale_coordinates(x1, y1, width, height)
+        self.selected_region = (int(lx), int(ly), int(lw), int(lh))
         
         # 调用回调函数
         if self.callback:
-            self.callback(x1, y1, width, height)
+            self.callback(int(lx), int(ly), int(lw), int(lh))
         
         # 关闭窗口
         self.root.destroy()

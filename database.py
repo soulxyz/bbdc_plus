@@ -7,6 +7,7 @@ import re
 from bs4 import BeautifulSoup
 from typing import Dict, List, Optional
 import difflib
+import config
 
 
 class WordDatabase:
@@ -103,12 +104,27 @@ class WordDatabase:
                 if root_split_index + 3 < len(parts):
                     word_info['extra'] = '='.join(parts[root_split_index + 3:])
             else:
-                # 没有词根拆分，直接取释义
-                # 跳过空的部分
-                for part in parts:
-                    part = part.strip()
-                    if part and len(part) > 0:
-                        word_info['definition'] = part
+                # 没有词根拆分，选择更像“释义”的片段：
+                # - 跳过与单词同名的片段（如 "=moment=片刻=n.片刻" 中的 'moment'）
+                # - 优先含中文或常见释义标记的片段
+                # - 从右往左找，通常靠后位置更接近释义
+                def is_better_def(s: str) -> bool:
+                    if not s:
+                        return False
+                    if s.lower() == word:
+                        return False
+                    # 含中文或常见释义标记更优
+                    if re.search(r'[\u4e00-\u9fa5]', s):
+                        return True
+                    if re.search(r'[.;，；、]', s):
+                        return True
+                    # 纯英文短语也允许作为兜底
+                    return True
+
+                for part in reversed(parts):
+                    cand = part.strip()
+                    if is_better_def(cand):
+                        word_info['definition'] = cand
                         break
         else:
             # 没有词根拆分的单词，直接放剩余内容
@@ -118,6 +134,11 @@ class WordDatabase:
         examples = re.findall(r'【真题意群】([^【]+)', text)
         if examples:
             word_info['examples'] = [ex.strip() for ex in examples]
+        
+        # 清理释义中的“真题意群”片段，避免 UI 重复展示
+        if 'definition' in word_info:
+            cleaned = re.sub(r'【真题意群】[^【]+', '', word_info['definition']).strip()
+            word_info['definition'] = cleaned
         
         # 提取同义词/反义词（通常在末尾）
         synonyms = re.findall(r'(?:同义|近义)[：:]?\s*([a-zA-Z\s,;]+)', text)
@@ -147,14 +168,23 @@ class WordDatabase:
         # 模糊匹配
         if fuzzy and len(word) > 3:
             # 使用 difflib 找到最接近的单词
-            matches = difflib.get_close_matches(word, self.word_list, n=1, cutoff=0.8)
+            cutoff = getattr(config, 'FUZZY_MATCH_THRESHOLD', 0.85)
+            matches = difflib.get_close_matches(word, self.word_list, n=1, cutoff=cutoff)
             if matches:
                 matched_word = matches[0]
-                result = self.word_dict[matched_word].copy()
-                result['fuzzy_match'] = True
-                result['original_query'] = word
-                result['matched_word'] = matched_word
-                return result
+                # 计算相似度分数
+                ratio = difflib.SequenceMatcher(None, word, matched_word).ratio()
+                # 额外约束：首字母不同且长度>=5时，提高阈值，避免 massive→passive 这类误判
+                extra = 0.0
+                if len(word) >= 5 and word[0] != matched_word[0]:
+                    extra = 0.07
+                if ratio >= cutoff + extra:
+                    result = self.word_dict[matched_word].copy()
+                    result['fuzzy_match'] = True
+                    result['original_query'] = word
+                    result['matched_word'] = matched_word
+                    result['fuzzy_score'] = ratio
+                    return result
         
         return None
     
@@ -179,18 +209,32 @@ class WordDatabase:
         Returns:
             [(词根, 含义), ...] 列表
         """
-        if 'root_split' not in word_info:
-            return []
+        related: List[tuple] = []
         
-        root_split = word_info['root_split']
-        # 提取词根（以 + 分隔）
-        roots = re.findall(r'[a-zA-Z]+', root_split)
+        # 优先：从结构化的 root_split 中提取
+        if 'root_split' in word_info:
+            root_split = word_info['root_split']
+            roots = re.findall(r'[a-zA-Z]+', root_split)
+            for root in roots:
+                root_lower = root.lower()
+                if root_lower in self.root_dict:
+                    related.append((root, self.root_dict[root_lower]))
+            if related:
+                return related
         
-        related = []
-        for root in roots:
-            root_lower = root.lower()
-            if root_lower in self.root_dict:
-                related.append((root, self.root_dict[root_lower]))
+        # 兜底：按单词中包含的词根进行匹配（如 momentum → moment）
+        word = word_info.get('word', '').lower()
+        if not word:
+            return related
+        
+        # 仅考虑长度≥3的词根，按长度从长到短，最多取3个，避免噪声
+        for root in sorted(self.root_dict.keys(), key=len, reverse=True):
+            if len(root) < 3:
+                break
+            if root in word and all(root.lower() not in r[0].lower() for r in related):
+                related.append((root, self.root_dict[root]))
+                if len(related) >= 3:
+                    break
         
         return related
 

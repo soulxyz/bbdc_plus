@@ -6,6 +6,7 @@ BBDC Plus - 背单词增强工具
 import sys
 import threading
 import time
+import queue
 from typing import Optional, Tuple
 import keyboard
 import config
@@ -15,6 +16,7 @@ from database import WordDatabase
 from screen_selector import ScreenSelector
 from ocr_engine import OCREngine
 from floating_window import FloatingWindow
+from dpi_utils import get_dpi_manager
 
 
 class BBDCPlus:
@@ -24,12 +26,17 @@ class BBDCPlus:
         print("🚀 BBDC Plus - 背单词增强工具")
         print("="*80)
         
+        # 初始化 DPI 管理器
+        print("\n🖥️  初始化 DPI 设置...")
+        self.dpi_manager = get_dpi_manager()
+        
         # 初始化各个模块
         print("\n📚 正在加载数据库...")
         self.database = WordDatabase(config.DATABASE_FILE)
         
         print("🔍 初始化 OCR 引擎...")
-        self.ocr = OCREngine()
+        # 使用共享实例，避免重复加载模型
+        self.ocr = OCREngine.get_shared()
         
         print("🖼️  创建悬浮窗...")
         self.window = FloatingWindow()
@@ -39,6 +46,9 @@ class BBDCPlus:
         self.is_running = True
         self.is_paused = False
         self.ocr_thread: Optional[threading.Thread] = None
+        
+        # 命令队列（用于线程安全的快捷键处理）
+        self.command_queue = queue.Queue()
         
         # 注册全局快捷键
         self._register_hotkeys()
@@ -64,27 +74,53 @@ class BBDCPlus:
     
     def _on_reselect(self):
         """重新选择屏幕区域"""
-        print("\n🖱️  重新选择屏幕区域...")
-        self.select_region()
+        # 将命令放入队列，由主线程处理
+        self.command_queue.put('reselect')
     
     def _on_toggle(self):
         """切换悬浮窗显示/隐藏"""
-        self.window.toggle()
-        state = "隐藏" if self.window.is_hidden else "显示"
-        print(f"\n👁️  悬浮窗已{state}")
+        # 将命令放入队列，由主线程处理
+        self.command_queue.put('toggle')
     
     def _on_pause(self):
         """暂停/继续识别"""
+        # 这个操作不涉及 GUI，可以直接执行
         self.is_paused = not self.is_paused
         state = "暂停" if self.is_paused else "继续"
         print(f"\n⏸️  识别已{state}")
     
     def _on_exit(self):
         """退出程序"""
+        # 将命令放入队列，由主线程处理
         print("\n👋 正在退出...")
         self.is_running = False
-        self.window.destroy()
-        sys.exit(0)
+        self.command_queue.put('exit')
+    
+    def _process_commands(self):
+        """处理命令队列（在主线程中周期性调用）"""
+        try:
+            while not self.command_queue.empty():
+                command = self.command_queue.get_nowait()
+                
+                if command == 'reselect':
+                    print("\n🖱️  重新选择屏幕区域...")
+                    self.select_region()
+                
+                elif command == 'toggle':
+                    self.window.toggle()
+                    state = "隐藏" if self.window.is_hidden else "显示"
+                    print(f"\n👁️  悬浮窗已{state}")
+                
+                elif command == 'exit':
+                    self.window.destroy()
+                    sys.exit(0)
+        
+        except queue.Empty:
+            pass
+        
+        # 继续周期性检查命令队列
+        if self.is_running:
+            self.window.root.after(100, self._process_commands)
     
     def select_region(self) -> bool:
         """选择屏幕识别区域
@@ -92,7 +128,7 @@ class BBDCPlus:
         Returns:
             是否成功选择区域
         """
-        selector = ScreenSelector()
+        selector = ScreenSelector(master=self.window.root)
         region = selector.select_region()
         
         if region:
@@ -111,19 +147,29 @@ class BBDCPlus:
         
         x, y, width, height = self.selected_region
         last_word = None
+        loop_count = 0
         
         print(f"\n🔄 开始识别循环（每 {config.OCR_INTERVAL} 秒）")
         print("   按 F4 暂停/继续，按 ESC 退出\n")
         
         while self.is_running:
             try:
+                loop_count += 1
+                
                 # 如果暂停，跳过识别
                 if self.is_paused:
                     time.sleep(0.5)
                     continue
                 
+                # 显示识别进度（每5次显示一次）
+                if config.DEBUG and loop_count % 5 == 0:
+                    print(f"⏱️  正在识别... (第 {loop_count} 次)")
+                
                 # 识别屏幕区域
                 words = self.ocr.recognize_region(x, y, width, height)
+                
+                if config.DEBUG:
+                    print(f"🔍 识别结果: {words if words else '(空)'}")
                 
                 if not words:
                     time.sleep(config.OCR_INTERVAL)
@@ -132,15 +178,20 @@ class BBDCPlus:
                 # 获取主要单词
                 primary_word = self.ocr.get_primary_word(words)
                 
+                if config.DEBUG:
+                    print(f"   → 主单词: {primary_word}")
+                
                 # 如果和上次相同，跳过
                 if not self.ocr.should_update(primary_word):
+                    if config.DEBUG:
+                        print(f"   → 和上次相同，跳过")
                     time.sleep(config.OCR_INTERVAL)
                     continue
                 
-                if config.DEBUG:
-                    print(f"🔍 识别: {words} → 主单词: {primary_word}")
-                
                 # 查询数据库
+                if config.DEBUG:
+                    print(f"📚 查询数据库: {primary_word}")
+                
                 word_info = self.database.lookup(primary_word, fuzzy=True)
                 
                 if word_info:
@@ -163,8 +214,10 @@ class BBDCPlus:
                 last_word = primary_word
                 
             except Exception as e:
+                print(f"❌ 识别错误: {e}")
                 if config.DEBUG:
-                    print(f"❌ 识别错误: {e}")
+                    import traceback
+                    traceback.print_exc()
             
             # 等待下一次识别
             time.sleep(config.OCR_INTERVAL)
@@ -184,6 +237,9 @@ class BBDCPlus:
         self.ocr_thread = threading.Thread(target=self._ocr_loop, daemon=True)
         self.ocr_thread.start()
         
+        # 启动命令处理循环
+        self.window.root.after(100, self._process_commands)
+        
         # 运行 GUI 主循环
         try:
             self.window.run()
@@ -195,11 +251,6 @@ class BBDCPlus:
 
 def main():
     """主函数"""
-    # 配置 Tesseract 路径（如果需要）
-    if config.TESSERACT_CMD:
-        import pytesseract
-        pytesseract.pytesseract.tesseract_cmd = config.TESSERACT_CMD
-    
     try:
         # 创建并运行应用
         app = BBDCPlus()

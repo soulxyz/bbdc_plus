@@ -18,7 +18,7 @@ if errorlevel 1 (
     timeout /t 3 >nul
 )
 
-python main.py
+python start_clean.py
 
 if errorlevel 1 (
     echo.

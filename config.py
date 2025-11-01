@@ -27,6 +27,7 @@ COLOR_SECTION_TITLE = "#3498DB"  # 标题颜色（蓝色）
 COLOR_BODY = "#E8E8E8"         # 正文颜色（浅灰）
 COLOR_ROOT = "#F39C12"         # 词根颜色（橙色）
 COLOR_SEPARATOR = "#34495E"    # 分隔线颜色（深灰）
+COLOR_EXAMPLES = "#C0E6FF"     # 真题意群文本颜色（浅蓝）
 
 # 快捷键配置
 HOTKEY_RESELECT = 'F2'     # 重新选择区域
@@ -34,17 +35,22 @@ HOTKEY_TOGGLE = 'F3'       # 显示/隐藏悬浮窗
 HOTKEY_PAUSE = 'F4'        # 暂停/继续识别
 HOTKEY_EXIT = 'ESC'        # 退出程序
 
-# Tesseract OCR 路径（Windows 用户可能需要配置）
-# 如果 Tesseract 不在系统 PATH 中，请取消注释并设置正确路径
-# TESSERACT_CMD = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-TESSERACT_CMD = None
-
+# 已弃用 Tesseract，现使用 RapidOCR（无需配置）
 # 数据库文件路径
 DATABASE_FILE = "词汇新修版讲义_files/content.htm"
 
 # 模糊匹配阈值（0-1，越高越严格）
-FUZZY_MATCH_THRESHOLD = 0.8
+FUZZY_MATCH_THRESHOLD = 0.9
 
 # 调试模式
-DEBUG = False
+DEBUG = True
+
+# 屏幕相似度跳过 OCR 的阈值（基于 aHash 的汉明距离，0-64，越小越严格）
+IMAGE_HASH_DIFF_THRESHOLD = 2
+
+# OCR 性能优化
+OCR_FAST_MODE = True           # 开启快速模式：灰度+二值化+下采样
+OCR_DOWNSCALE = 0.9          # 下采样比例（0-1，越小越快）
+OCR_MAX_WIDTH = 9000            # OCR 输入的最大宽度（像素）
+OCR_BIN_THRESHOLD = 180        # 二值化阈值（0-255）
 
